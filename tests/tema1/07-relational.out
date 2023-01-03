@@ -1,0 +1,26 @@
+program
+  class
+    A
+    attribute
+      n
+      Int
+    attribute
+      b
+      Bool
+      not
+        <=
+          2
+          n
+    attribute
+      c
+      Bool
+      =
+        <
+          2
+          +
+            n
+            1
+        false
+"07-relational.cl", line 3:21, Semantic error: Operand of not has type Int instead of Bool
+"07-relational.cl", line 4:27, Semantic error: Cannot compare Int with Bool
+Compilation halted
