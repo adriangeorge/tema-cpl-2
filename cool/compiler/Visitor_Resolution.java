@@ -10,20 +10,131 @@ import cool.structures.SymbolTable;
 
 public class Visitor_Resolution implements ASTVisitor<Symbol_Type> {
 
-    // Checks whether child inherits class parent
-    // public boolean checkInheritance(Symbol_Type child, Symbol_Type parent) {
-    //     var parent_name = child.name;
-    //     Symbol_Type parent_type = child;
-    //     do {
-    //         if (parent_name.equals(parent.name)) {
-    //             return true;
-    //         }
-    //         parent_name = parent_type.inheritance;
-    //         parent_type = (Symbol_Type) SymbolTable.globals.lookup_attribute(parent_name);
-    //     } while (parent_type != null);
+    // According to cool manual, for multiple type branches a join must be computed,
+    // a.k.a. lowest common ancestor for classes
+    // Source for lowest common ancestor:
+    // https://www.baeldung.com/cs/tree-lowest-common-ancestor
 
-    //     return false;
-    // }
+    public Integer findDistanceToObject(Symbol_Type type) {
+        Integer distance_counter = 0;
+        // System.out.println("For class: " + type.name + " counting levels until
+        // \"Object\"");
+        // Get initial parent
+        var parent_name = "";
+        var parent = (Symbol_Type) SymbolTable.globals.lookup_attribute(type.name);
+        // if no inheritance return 1
+        if (parent.inheritance == null) {
+            return 1;
+        }
+        do {
+            parent_name = parent.inheritance;
+            parent = (Symbol_Type) SymbolTable.globals.lookup_attribute(parent_name);
+            distance_counter++;
+        } while (parent != null);
+        // System.out.println("Class " + type.name + " is at a distance of " +
+        // distance_counter);
+        return distance_counter;
+    }
+
+    public Integer findDistanceToParent(Symbol_Type type, Symbol_Type parent) {
+        Integer distance_counter = 0;
+        var parent_name = "";
+
+        if (type.name.equals(parent.name)) {
+            return distance_counter;
+        }
+        // if no inheritance return -1 (error)
+        if (type.inheritance == null) {
+            // check if on of the base types
+            return -1;
+        }
+        do {
+            parent_name = type.inheritance;
+            type = (Symbol_Type) SymbolTable.globals.lookup_attribute(parent_name);
+            distance_counter++;
+            if (parent_name.equals(type.name)) {
+                return distance_counter;
+            }
+        } while (parent != null);
+        // System.out.println("Class " + type.name + " is at a distance of " +
+        // distance_counter);
+        return -1;
+    }
+
+    public Symbol_Type getParentAbove(Symbol_Type type, Integer up_levels) {
+        // System.out.println("For class: " + type.name + " moving up " + up_levels + "
+        // levels");
+        var parent_name = "";
+        var parent = (Symbol_Type) SymbolTable.globals.lookup_attribute(type.name);
+        do {
+            parent_name = parent.inheritance;
+
+            parent = (Symbol_Type) SymbolTable.globals.lookup_attribute(parent_name);
+            up_levels--;
+            if (up_levels == 0) {
+                // System.out.println("Moved from " + type.name + " to " + parent.name);
+                return parent;
+            }
+        } while (parent != null);
+
+        return Symbol_Type.Object;
+
+    }
+
+    public Symbol_Type findLCA(ArrayList<Symbol_Type> types) {
+        // For each child find distance to Object "root"
+        ArrayList<Integer> distances = new ArrayList<>(types.size());
+        for (int i = 0; i < types.size(); i++) {
+            distances.add(findDistanceToObject(types.get(i)));
+        }
+
+        // Find smallest distance to Object
+        Integer smallest_dist = distances.get(0);
+        for (Integer integer : distances) {
+            if (integer <= smallest_dist)
+                smallest_dist = integer;
+        }
+        // System.out.println("Smallest distance: " + smallest_dist);
+        // // Optimisation: If the smallest distance is already 1 (next inheritance is
+        // // "Object") stop here
+        // if (smallest_dist == 1)
+        // return Symbol_Type.Object;
+
+        // Attempt to get all types to the same level in inheritance tree
+        for (int i = 0; i < types.size(); i++) {
+            Integer level_difference = distances.get(i) - smallest_dist;
+            // Node already at smallest distance
+            if (level_difference <= 0)
+                continue;
+
+            // Get to parent on smallest level
+            types.set(i, getParentAbove(types.get(i), level_difference));
+            distances.set(i, findDistanceToObject(types.get(i)));
+        }
+
+        while (smallest_dist >= 1) {
+            // Check if all types are the same
+            var same_type_flag = true;
+            for (int i = 1; i < types.size(); i++) {
+                if (types.get(i - 1) != types.get(i))
+                    same_type_flag = false;
+            }
+
+            if (same_type_flag) {
+                // System.out.println("Found common ancestor at " + types.get(0).name);
+                return types.get(0);
+            } else {
+                smallest_dist--;
+            }
+            // Move each type up the tree one step at a time
+            for (int i = 0; i < types.size(); i++) {
+                types.set(i, getParentAbove(types.get(i), 1));
+            }
+
+        }
+
+        return Symbol_Type.Object;
+    }
 
     @Override
     public Symbol_Type visit(Program a) {
@@ -156,9 +267,24 @@ public class Visitor_Resolution implements ASTVisitor<Symbol_Type> {
         }
 
         if (a.body != null) {
-            a.body.accept(this);
+            Symbol_Type init_type = a.body.accept(this);
+            if (init_type == null) {
+                return null;
+            }
+            int distance_init_var_type = findDistanceToParent(init_type, return_type);
+            if (distance_init_var_type == -1 && return_type != Symbol_Type.Object) {
+                SymbolTable.error(a.ctx, a.body.ctx.start,
+                        "Type "
+                                + init_type.name
+                                + " of the body of method "
+                                + a.id.getText()
+                                + " is incompatible with declared return type "
+                                + return_type.name);
+                return null;
+            }
+            return init_type;
         }
-        return null;
+        return (Symbol_Type) SymbolTable.globals.lookup_attribute(a.type.getText());
     }
 
     @Override
@@ -208,9 +334,24 @@ public class Visitor_Resolution implements ASTVisitor<Symbol_Type> {
 
         // Set var type
         if (a.init != null) {
-            a.init.accept(this);
+            Symbol_Type init_type = a.init.accept(this);
+            if (init_type == null) {
+                return null;
+            }
+            int distance_init_var_type = findDistanceToParent(init_type, type_check);
+            if (distance_init_var_type == -1) {
+                SymbolTable.error(a.ctx, a.init.ctx.start,
+                        "Type "
+                                + init_type.name
+                                + " of initialization expression of attribute "
+                                + a.id.getText()
+                                + " is incompatible with declared type "
+                                + type_check.name);
+                return null;
+            }
+            return init_type;
         }
-        return null;
+        return (Symbol_Type) SymbolTable.globals.lookup_attribute(a.type.getText());
     }
 
     @Override
@@ -278,35 +419,39 @@ public class Visitor_Resolution implements ASTVisitor<Symbol_Type> {
     }
 
     @Override
-    public Symbol_Type visit(OopDispatch a) {
+    public Symbol_Type visit(FuncCall a) {
 
-        a.left.accept(this);
-
-        if (a.parent_type != null) {
-
-        }
-
+        ArrayList<Symbol_Type> param_types = new ArrayList<>();
         for (var p : a.param_list) {
-            p.accept(this);
+            param_types.add(p.accept(this));
         }
+
         return null;
     }
 
     @Override
-    public Symbol_Type visit(FuncCall a) {
+    public Symbol_Type visit(OopDispatch a) {
 
+        // Get class where method is called and method information
+        var left_type = a.left.accept(this);
+        var method_info = left_type.lookup_method(a.method_id.tk.getText());
+        
+        ArrayList<Symbol_Type> param_types = new ArrayList<>();
         for (var p : a.param_list) {
-            p.accept(this);
+            param_types.add(p.accept(this));
         }
-
-        return null;
+        return (Symbol_Type) left_type.lookup_attribute(method_info.return_type);
     }
 
     @Override
     public Symbol_Type visit(ObjId a) {
-        // check for illegal naming self
+        // check for self reference
         if (a.tk.getText().equals("self")) {
-            return null;
+            var class_scope = a.scope;
+            while (class_scope.getParentScope() != SymbolTable.globals) {
+                class_scope = class_scope.getParentScope();
+            }
+            return (Symbol_Type) class_scope;
         }
 
         // look for variable in scope
@@ -457,11 +602,11 @@ public class Visitor_Resolution implements ASTVisitor<Symbol_Type> {
 
     @Override
     public Symbol_Type visit(Block a) {
-
+        Symbol_Type last_type = null;
         for (var e : a.expr_list) {
-            e.accept(this);
+            last_type = e.accept(this);
         }
-        return null;
+        return last_type;
     }
 
     @Override
@@ -551,30 +696,14 @@ public class Visitor_Resolution implements ASTVisitor<Symbol_Type> {
         var else_type = a.else_expr.accept(this);
 
         // Check if type of then and else branches are compatible
-        // Return highest common type
-        // First check if type of then inherits type of else
-        var parent_name = then_type.name;
-        Symbol_Type parent_type = then_type;
-        do {
-            if (parent_name.equals(else_type.name)) {
-                return parent_type;
-            }
-            parent_name = parent_type.inheritance;
-            parent_type = (Symbol_Type) SymbolTable.globals.lookup_attribute(parent_name);
-        } while (parent_type != null);
+        if (else_type == then_type) {
+            return then_type;
+        }
 
-        // Check if type of else inherits type of then
-        parent_name = else_type.name;
-        parent_type = else_type;
-        do {
-            if (parent_name.equals(then_type.name)) {
-                return parent_type;
-            }
-            parent_name = parent_type.inheritance;
-            parent_type = (Symbol_Type) SymbolTable.globals.lookup_attribute(parent_name);
-        } while (parent_type != null);
-
-        return Symbol_Type.Object;
+        var typeArray = new ArrayList<Symbol_Type>(2);
+        typeArray.add(then_type);
+        typeArray.add(else_type);
+        return findLCA(typeArray);
 
     }
 
@@ -585,8 +714,8 @@ public class Visitor_Resolution implements ASTVisitor<Symbol_Type> {
             l.accept(this);
         }
 
-        a.expr.accept(this);
-        return null;
+        var expr_type = a.expr.accept(this);
+        return expr_type;
     }
 
     @Override
@@ -594,11 +723,14 @@ public class Visitor_Resolution implements ASTVisitor<Symbol_Type> {
 
         a.init.accept(this);
 
+        ArrayList<Symbol_Type> branch_types = new ArrayList<>();
         for (var c : a.cases) {
-
-            c.accept(this);
+            var branch_type = c.accept(this);
+            if (branch_type != null) {
+                branch_types.add(branch_type);
+            }
         }
-        return null;
+        return findLCA(branch_types);
     }
 
     @Override
@@ -627,9 +759,9 @@ public class Visitor_Resolution implements ASTVisitor<Symbol_Type> {
             return null;
         }
 
-        a.expr.accept(this);
+        var case_branch_type = a.expr.accept(this);
 
-        return null;
+        return case_branch_type;
     }
 
     @Override
@@ -663,8 +795,10 @@ public class Visitor_Resolution implements ASTVisitor<Symbol_Type> {
         // Check if local variable type and init type match
         if (a.init != null) {
             Symbol_Type init_type = a.init.accept(this);
-            if (init_type != type_check) {
-                SymbolTable.error(a.ctx, a.type.tk,
+            // Perform LCA search to determine if types are compatible
+            int distance_init_var_type = findDistanceToParent(init_type, type_check);
+            if (distance_init_var_type == -1) {
+                SymbolTable.error(a.ctx, a.init.ctx.start,
                         "Type "
                                 + init_type.name
                                 + " of initialization expression of identifier "

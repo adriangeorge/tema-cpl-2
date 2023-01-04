@@ -299,7 +299,6 @@ public class Visitor_Definition implements ASTVisitor<Void> {
         a.init.accept(this);
 
         for (var c : a.cases) {
-
             c.accept(this);
         }
         currentScope = currentScope.getParentScope();
